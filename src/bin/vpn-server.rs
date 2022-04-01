@@ -1,8 +1,5 @@
-#[macro_use]
-extern crate log;
-extern crate env_logger;
-
-use flexi_logger::{FileSpec, Logger, WriteMode};
+use flexi_logger::{detailed_format, FileSpec, Logger, WriteMode};
+use log::info;
 use rqst::quic::*;
 use rqst::vpn;
 use std::sync::{Arc, Mutex};
@@ -14,6 +11,7 @@ fn main() {
         .subcommand_required(false)
         .arg_required_else_help(false)
         .arg(clap::arg!(-d - -disable_verify).help("Disable to verify the client certificate"))
+        .arg(clap::arg!(-v - -verbose).help("Print logs to Stderr"))
         .subcommand(clap::Command::new("install").about("Install this program as service"))
         .subcommand(clap::Command::new("uninstall").about("Uninstall this program as service"))
         .subcommand(
@@ -42,7 +40,12 @@ fn main() {
             .build()
             .unwrap()
             .block_on(async {
-                let _ = tokio_main(None, matches.is_present("disable_verify")).await;
+                let _ = tokio_main(
+                    None,
+                    matches.is_present("disable_verify"),
+                    matches.is_present("verbose"),
+                )
+                .await;
             }),
         _ => {}
     }
@@ -154,7 +157,7 @@ mod vpn_server_service {
             .build()
             .unwrap()
             .block_on(async {
-                let _ = crate::tokio_main(Some(notify_stop_rx), false).await;
+                let _ = crate::tokio_main(Some(notify_stop_rx), false, false).await;
             });
 
         status_handle.set_service_status(ServiceStatus {
@@ -173,12 +176,18 @@ mod vpn_server_service {
 async fn tokio_main(
     notify_stop: Option<mpsc::Receiver<()>>,
     disable_verify: bool,
+    verbose: bool,
 ) -> std::result::Result<(), Box<dyn std::error::Error>> {
     let current_exe = std::env::current_exe().unwrap();
-    let _logger = Logger::try_with_str("info")?
-        .log_to_file(FileSpec::default().directory(current_exe.parent().unwrap()))
+    let logger = Logger::try_with_env_or_str("info")?
         .write_mode(WriteMode::BufferAndFlush)
-        .start()?;
+        .format(detailed_format);
+    let logger = if verbose {
+        logger.log_to_stderr()
+    } else {
+        logger.log_to_file(FileSpec::default().directory(current_exe.parent().unwrap()))
+    };
+    let _logger_handle = logger.start()?;
 
     let tap_entries = vpn::get_tap_entries()?;
     if tap_entries.is_empty() {
