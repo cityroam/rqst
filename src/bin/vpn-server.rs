@@ -195,8 +195,12 @@ async fn tokio_main(
         config.verify_peer(true);
     }
 
-    let crt_path = std::env::current_exe().unwrap().with_file_name("server.crt");
-    let key_path = std::env::current_exe().unwrap().with_file_name("server.key");
+    let crt_path = std::env::current_exe()
+        .unwrap()
+        .with_file_name("server.crt");
+    let key_path = std::env::current_exe()
+        .unwrap()
+        .with_file_name("server.key");
     config
         .load_cert_chain_from_pem_file(crt_path.to_str().unwrap())
         .unwrap();

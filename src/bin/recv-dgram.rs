@@ -1,7 +1,7 @@
 extern crate env_logger;
 
-use std::time::{Duration, Instant};
 use rqst::quic::*;
+use std::time::{Duration, Instant};
 use tokio::sync::{broadcast, mpsc};
 
 #[tokio::main]
@@ -9,13 +9,17 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     env_logger::init();
 
     let mut config = quiche::Config::new(quiche::PROTOCOL_VERSION).unwrap();
-    config.load_verify_locations_from_file("src/ca.crt").unwrap();
+    config
+        .load_verify_locations_from_file("src/ca.crt")
+        .unwrap();
     config.verify_peer(true);
 
     config
         .load_cert_chain_from_pem_file("src/server.crt")
         .unwrap();
-    config.load_priv_key_from_pem_file("src/server.key").unwrap();
+    config
+        .load_priv_key_from_pem_file("src/server.key")
+        .unwrap();
 
     config.set_application_protos(b"\x03vpn").unwrap();
 
