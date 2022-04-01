@@ -259,6 +259,7 @@ async fn tokio_main(
     let socket = socket2::Socket::new(socket2::Domain::IPV6, socket2::Type::DGRAM, None)?;
     let address: std::net::SocketAddr = "[::]:3456".parse().unwrap();
     let address = address.into();
+    socket.set_only_v6(true).unwrap();
     socket.bind(&address)?;
     socket.set_recv_buffer_size(0x7fffffff).unwrap();
     socket.set_nonblocking(true).unwrap();
