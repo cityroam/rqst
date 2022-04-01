@@ -1,7 +1,5 @@
-#[macro_use]
-extern crate log;
-extern crate env_logger;
-
+use flexi_logger::{detailed_format, FileSpec, Logger, WriteMode};
+use log::{error, info};
 use rqst::quic::*;
 use rqst::vpn;
 use std::env;
@@ -10,15 +8,25 @@ use tokio::sync::{broadcast, mpsc};
 
 #[tokio::main]
 async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
-    env_logger::init();
-
     let matches = clap::command!()
         .propagate_version(true)
         .subcommand_required(false)
         .arg_required_else_help(false)
         .arg(clap::arg!(<URL>).help("Url to connect").required(true))
         .arg(clap::arg!(-d - -disable_verify).help("Disable to verify the server certificate"))
+        .arg(clap::arg!(-v - -verbose).help("Print logs to Stderr"))
         .get_matches();
+
+    let current_exe = std::env::current_exe().unwrap();
+    let logger = Logger::try_with_env_or_str("info")?
+        .write_mode(WriteMode::BufferAndFlush)
+        .format(detailed_format);
+    let logger = if matches.is_present("verbose") {
+        logger.log_to_stderr()
+    } else {
+        logger.log_to_file(FileSpec::default().directory(current_exe.parent().unwrap()))
+    };
+    let _logger_handle = logger.start()?;
 
     let url = matches.value_of("URL").unwrap();
     let url = url::Url::parse(url).unwrap();
