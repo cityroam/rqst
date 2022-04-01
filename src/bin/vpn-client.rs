@@ -39,12 +39,18 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
         config.verify_peer(true);
     }
 
-    let crt_path = std::env::current_exe().unwrap().with_file_name("client.crt");
-    let key_path = std::env::current_exe().unwrap().with_file_name("client.key");
+    let crt_path = std::env::current_exe()
+        .unwrap()
+        .with_file_name("client.crt");
+    let key_path = std::env::current_exe()
+        .unwrap()
+        .with_file_name("client.key");
     config
         .load_cert_chain_from_pem_file(crt_path.to_str().unwrap())
         .unwrap();
-    config.load_priv_key_from_pem_file(key_path.to_str().unwrap()).unwrap();
+    config
+        .load_priv_key_from_pem_file(key_path.to_str().unwrap())
+        .unwrap();
 
     config.set_application_protos(b"\x03vpn").unwrap();
 

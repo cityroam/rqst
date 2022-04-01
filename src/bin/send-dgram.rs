@@ -25,8 +25,12 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
         .unwrap();
     config.verify_peer(true);
 
-    config.load_cert_chain_from_pem_file("src/client.crt").unwrap();
-    config.load_priv_key_from_pem_file("src/client.key").unwrap();
+    config
+        .load_cert_chain_from_pem_file("src/client.crt")
+        .unwrap();
+    config
+        .load_priv_key_from_pem_file("src/client.key")
+        .unwrap();
 
     config.set_application_protos(b"\x03vpn").unwrap();
 

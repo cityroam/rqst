@@ -107,7 +107,7 @@ pub async fn transfer(
                 .create(true)
                 .open(path)
                 .unwrap();
-    
+
             let pcap_writer = PcapWriter::new(file).unwrap();
             Some(Arc::new(Mutex::new(pcap_writer)))
         } else {
@@ -125,14 +125,7 @@ pub async fn transfer(
         let pcap_writer1 = pcap_writer.clone();
         let shutdown_complete1 = shutdown_complete.clone();
         let mut task = tokio::spawn(async move {
-            remote_to_local(
-                quic,
-                tap,
-                pcap_writer,
-                notify_shutdown,
-                shutdown_complete,
-            )
-            .await;
+            remote_to_local(quic, tap, pcap_writer, notify_shutdown, shutdown_complete).await;
         });
         let mut task1 = tokio::spawn(async move {
             local_to_remote(
@@ -263,7 +256,7 @@ async fn local_to_remote(
                                     let ts_nsec = time.subsec_nanos();
                                     let orig_len = buf.len().try_into().unwrap();
                                     pcap_writer.write(ts_sec, ts_nsec, &buf[..], orig_len).unwrap();
-                                }    
+                                }
                             }
                             let buf = buf.freeze();
                             match quic.send_dgram(&buf).await {
