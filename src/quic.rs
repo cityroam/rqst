@@ -67,6 +67,10 @@ enum ActorMessage {
         conn_id: Vec<u8>,
         respond_to: oneshot::Sender<Result<()>>,
     },
+    PathStats {
+        conn_id: Vec<u8>,
+        respond_to: oneshot::Sender<Result<Vec<quiche::PathStats>>>,
+    },
 }
 
 struct QuicConnection {
@@ -135,6 +139,8 @@ impl QuicActor {
             }
             ActorMessage::Connect { url, respond_to } => {
                 let to = url.to_socket_addrs().unwrap().next().unwrap();
+                let udp = if to.is_ipv4() { &self.udp } else { &self.udp6 };
+                let from = udp.local_addr().unwrap();
                 // Generate a random source connection ID for the connection.
                 let mut scid = [0; quiche::MAX_CONN_ID_LEN];
                 let scid = &mut scid[0..self.conn_id_len];
@@ -142,7 +148,14 @@ impl QuicActor {
 
                 let scid = quiche::ConnectionId::from_ref(&scid).into_owned();
                 // Create a QUIC connection and initiate handshake.
-                let mut conn = quiche::connect(url.domain(), &scid, to, &mut self.config).unwrap();
+                let mut conn = quiche::connect(
+                    url.domain(),
+                    &scid,
+                    from,
+                    to,
+                    &mut self.config,
+                )
+                .unwrap();
 
                 if let Some(keylog) = &self.keylog {
                     if let Ok(keylog) = keylog.try_clone() {
@@ -292,6 +305,19 @@ impl QuicActor {
                     let _ = respond_to.send(Err(format!("No Connection: {:?}", conn_id).into()));
                 }
             }
+            ActorMessage::PathStats {
+                conn_id,
+                respond_to,
+            } => {
+                let conn_id = quiche::ConnectionId::from_vec(conn_id);
+                if let Some(conn) = self.conns.get_mut(&conn_id) {
+                    let stats = conn.quiche_conn.path_stats().collect::<Vec<quiche::PathStats>>();
+                    let _ = respond_to.send(Ok(stats));
+                } else {
+                    let _ =
+                        respond_to.send(Err(format!("No Connection: {:?}", conn_id).into()));
+                }
+            }
             ActorMessage::Close {
                 conn_id,
                 respond_to,
@@ -309,6 +335,12 @@ impl QuicActor {
 
     async fn handle_udp_dgram(&mut self, len: usize, from: SocketAddr) {
         trace!("Recv UDP {} bytes", len);
+        let udp = if from.is_ipv4() {
+            &self.udp
+        } else {
+            &self.udp6
+        };
+        let to = udp.local_addr().unwrap();
         let hdr = match quiche::Header::from_slice(&mut self.buf, quiche::MAX_CONN_ID_LEN) {
             Ok(v) => v,
             Err(e) => {
@@ -328,7 +360,14 @@ impl QuicActor {
 
             let new_dcid = quiche::ConnectionId::from_vec(new_dcid.into());
 
-            let mut conn = quiche::accept(&new_dcid, None, from, &mut self.config).unwrap();
+            let mut conn = quiche::accept(
+                &new_dcid,
+                None,
+                to,
+                from,
+                &mut self.config,
+            )
+            .unwrap();
 
             if let Some(keylog) = &mut self.keylog {
                 if let Ok(keylog) = keylog.try_clone() {
@@ -351,7 +390,7 @@ impl QuicActor {
             hdr.dcid.clone()
         };
 
-        let recv_info = quiche::RecvInfo { from };
+        let recv_info = quiche::RecvInfo { from, to };
         // Process potentially coalesced packets.
         if let Some(conn) = self.conns.get_mut(&conn_id) {
             if let Err(e) = conn.quiche_conn.recv(&mut self.buf[..len], recv_info) {
@@ -686,6 +725,16 @@ impl QuicConnectionHandle {
         recv.await.expect("Actor task has been killed")
     }
 
+    pub async fn path_stats(&self) -> Result<Vec<quiche::PathStats>> {
+        let (send, recv) = oneshot::channel();
+        let msg = ActorMessage::PathStats {
+            conn_id: self.conn_id.clone(),
+            respond_to: send,
+        };
+        let _ = self.sender.send(msg).await;
+        recv.await.expect("Actor task has been killed")
+    }
+
     pub async fn close(&self) -> Result<()> {
         let (send, recv) = oneshot::channel();
         let msg = ActorMessage::Close {
@@ -707,7 +756,7 @@ pub mod testing {
         let mut config = quiche::Config::new(quiche::PROTOCOL_VERSION)?;
         config.load_cert_chain_from_pem_file("src/cert.crt")?;
         config.load_priv_key_from_pem_file("src/cert.key")?;
-        config.set_application_protos(b"\x06proto1")?;
+        config.set_application_protos(&[b"proto1"])?;
         config.set_max_idle_timeout(10000);
         config.set_max_recv_udp_payload_size(1350);
         config.set_max_send_udp_payload_size(1350);
@@ -737,7 +786,7 @@ pub mod testing {
 
     pub async fn open_client(shutdown_complete_tx: mpsc::Sender<()>) -> Result<QuicHandle> {
         let mut config = quiche::Config::new(quiche::PROTOCOL_VERSION)?;
-        config.set_application_protos(b"\x06proto1")?;
+        config.set_application_protos(&[b"proto1"])?;
         config.verify_peer(false);
         config.set_max_idle_timeout(10000);
         config.set_max_recv_udp_payload_size(1350);

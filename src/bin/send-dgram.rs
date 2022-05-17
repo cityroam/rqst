@@ -32,7 +32,7 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
         .load_priv_key_from_pem_file("src/client.key")
         .unwrap();
 
-    config.set_application_protos(b"\x03vpn").unwrap();
+    config.set_application_protos(&[b"vpn"]).unwrap();
 
     config.set_max_idle_timeout(0);
     config.set_max_recv_udp_payload_size(1350);
@@ -127,13 +127,15 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
         loop {
             if Instant::now().duration_since(now) >= Duration::from_secs(1) {
                 if let Ok(stats) = conn.stats().await {
+                    println!("lost: {}", stats.lost);   
+                }
+                if let Ok(paths) = conn.path_stats().await {
                     println!(
-                        "lost: {}, rtt: {:?}, cwnd: {} bytes, delivery_rate: {:.3} Mbps",
-                        stats.lost,
-                        stats.rtt,
-                        stats.cwnd,
-                        stats.delivery_rate as f64 * 8.0 / (1024.0 * 1024.0)
-                    );
+                        "rtt: {:?}, cwnd: {} bytes, delivery_rate: {:.3} Mbps",
+                        paths[0].rtt,
+                        paths[0].cwnd,
+                        paths[0].delivery_rate as f64 * 8.0 / (1024.0 * 1024.0)
+                    );                    
                 }
                 now = Instant::now();
             }

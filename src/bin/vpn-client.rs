@@ -58,7 +58,7 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
         .load_priv_key_from_pem_file(key_path.to_str().unwrap())
         .unwrap();
 
-    config.set_application_protos(b"\x03vpn").unwrap();
+    config.set_application_protos(&[b"vpn"]).unwrap();
 
     config.set_max_idle_timeout(0);
     config.set_max_recv_udp_payload_size(1350);
