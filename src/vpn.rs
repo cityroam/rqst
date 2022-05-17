@@ -74,13 +74,18 @@ pub async fn transfer(
                 }
                 _ = sleep(Duration::from_secs(1)), if show_stats => {
                     if let Ok(stats) = quic2.stats().await {
-                        info!(
-                            "lost: {}, rtt: {:?}, cwnd: {} bytes, delivery_rate: {:.3} Mbps",
-                            stats.lost,
-                            stats.rtt,
-                            stats.cwnd,
-                            stats.delivery_rate as f64 * 8.0 / (1024.0 * 1024.0)
-                        );
+                        info!("lost: {}", stats.lost);
+                    }
+                    if let Ok(paths) = quic2.path_stats().await {
+                        for stats in paths {
+                            info!("local_addr: {}, peer_addr: {}, rtt: {:?}, cwnd: {} bytes, delivery_rate: {:.3} Mbps",
+                                stats.local_addr,
+                                stats.peer_addr,
+                                stats.rtt,
+                                stats.cwnd,
+                                stats.delivery_rate as f64 * 8.0 / (1024.0 * 1024.0)
+                            );
+                        }
                     }
                     if let Ok((front_len, queue_byte_size, queue_len)) = quic2.recv_dgram_info().await {
                         info!(
