@@ -3,7 +3,6 @@ use log::{error, info};
 use rqst::quic::*;
 use rqst::vpn;
 use std::env;
-use std::sync::{Arc, Mutex};
 use tokio::sync::{broadcast, mpsc};
 
 #[tokio::main]
@@ -34,10 +33,6 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     let url = matches.value_of("URL").unwrap();
     let url = url::Url::parse(url).unwrap();
 
-    let tap_entries = vpn::get_tap_entries()?;
-    if tap_entries.is_empty() {
-        panic!("No tap interface");
-    }
     let mut config = quiche::Config::new(quiche::PROTOCOL_VERSION).unwrap();
 
     if matches.is_present("disable_verify") {
@@ -125,8 +120,6 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
         shutdown_complete_tx.clone(),
     );
 
-    let tap_entries = Arc::new(Mutex::new(tap_entries));
-
     let mut notify_shutdown_rx = notify_shutdown.subscribe();
     let notify_shutdown_rx1 = notify_shutdown.subscribe();
     let shutdown_complete_tx1 = shutdown_complete_tx.clone();
@@ -159,7 +152,6 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
 
         vpn::transfer(
             conn,
-            tap_entries,
             notify_shutdown_rx,
             notify_shutdown_rx1,
             shutdown_complete_tx1,
