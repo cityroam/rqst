@@ -1,20 +1,31 @@
 use bytes::{Bytes, BytesMut};
 use std::collections::{HashMap, VecDeque};
 use std::fs::File;
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+use std::pin::Pin;
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::net::UdpSocket;
 use tokio::sync::{mpsc, oneshot};
+use tokio_stream::{Stream, StreamExt, StreamMap};
 
 use ring::rand::*;
 use std::net::{SocketAddr, ToSocketAddrs};
 
+use crate::sas::{bind_sas, select_local_addr, send_sas, try_recv_sas};
+
 pub type Error = Box<dyn std::error::Error + Send + Sync>;
 pub type Result<T> = std::result::Result<T, Error>;
 
+type SocketHandle = usize;
+type SocketMap = HashMap<SocketHandle, Arc<UdpSocket>>;
+
 struct QuicActor {
     receiver: mpsc::Receiver<ActorMessage>,
-    udp: UdpSocket,
-    udp6: UdpSocket,
+    next_socket_handle: SocketHandle,
+    sockets: SocketMap,
+    recv_stream:
+        StreamMap<usize, Pin<Box<dyn Stream<Item = (BytesMut, SocketAddr, SocketAddr)> + Send>>>,
     config: quiche::Config,
     keylog: Option<File>,
     conn_id_len: usize,
@@ -23,7 +34,6 @@ struct QuicActor {
     wait_conn_ids: VecDeque<quiche::ConnectionId<'static>>,
     accept_requests: VecDeque<AcceptRequest>,
     shutdown: bool,
-    buf: Vec<u8>,
     out: Vec<u8>,
     _shutdown_complete: mpsc::Sender<()>,
 }
@@ -32,6 +42,10 @@ struct QuicActor {
 enum ActorMessage {
     Accept {
         respond_to: oneshot::Sender<Result<Vec<u8>>>,
+    },
+    Listen {
+        local: SocketAddr,
+        respond_to: oneshot::Sender<Result<()>>,
     },
     Connect {
         url: url::Url,
@@ -75,6 +89,7 @@ enum ActorMessage {
 
 struct QuicConnection {
     quiche_conn: quiche::Connection,
+    socket: Arc<UdpSocket>,
     before_established: bool,
     connect_request: Option<ConnectRequest>,
     recv_dgram_readness_requests: VecDeque<RecvDgramReadnessRequest>,
@@ -102,8 +117,6 @@ struct SendDgramRequest {
 impl QuicActor {
     fn new(
         receiver: mpsc::Receiver<ActorMessage>,
-        udp: UdpSocket,
-        udp6: UdpSocket,
         config: quiche::Config,
         keylog: Option<File>,
         conn_id_len: usize,
@@ -112,8 +125,9 @@ impl QuicActor {
     ) -> Self {
         QuicActor {
             receiver,
-            udp,
-            udp6,
+            next_socket_handle: 0,
+            sockets: SocketMap::new(),
+            recv_stream: StreamMap::new(),
             config,
             keylog,
             conn_id_len,
@@ -122,10 +136,57 @@ impl QuicActor {
             wait_conn_ids: VecDeque::new(),
             accept_requests: VecDeque::new(),
             shutdown: false,
-            buf: vec![0; 4096],
             out: vec![0; 1350],
             _shutdown_complete: shutdown_complete,
         }
+    }
+
+    async fn add_socket(&mut self, local: SocketAddr) -> std::io::Result<SocketHandle> {
+        let socket = bind_sas(&local).await?;
+        let socket: socket2::Socket = socket.into_std().unwrap().into();
+        socket.set_recv_buffer_size(0x7fffffff).unwrap();
+        let socket: std::net::UdpSocket = socket.into();
+        let socket = Arc::new(tokio::net::UdpSocket::from_std(socket).unwrap());
+
+        let socket_handle = self.next_socket_handle;
+        self.sockets.insert(socket_handle, socket.clone());
+        self.next_socket_handle += 1;
+
+        let stream = Box::pin(async_stream::stream! {
+            'outer: loop {
+                if socket.readable().await.is_ok() {
+                    'inner: loop {
+                        let mut buf = BytesMut::with_capacity(2048);
+                        buf.resize(2048, 0);
+                        match try_recv_sas(&socket, &mut buf[..]) {
+                            Ok((len, from, to)) => {
+                                buf.truncate(len);
+                                let from = from.unwrap();
+                                let to = if to.is_some() {
+                                    let mut to = to.unwrap();
+                                    to.set_port(local.port());
+                                    to
+                                } else {
+                                    local
+                                };
+                                info!("from: {:?}, to: {:?}", from, to);
+                                yield((buf, from, to));
+                            },
+                            Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                                break 'inner;
+                            },
+                            Err(e) => {
+                                error!("try_recv_from() failed: {:?}", e);
+                                break 'outer;
+                            }
+                        }
+                    }
+                }
+            }
+        })
+            as Pin<Box<dyn Stream<Item = (BytesMut, SocketAddr, SocketAddr)> + Send>>;
+        self.recv_stream.insert(socket_handle, stream);
+        Ok(socket_handle)
     }
 
     async fn handle_message(&mut self, msg: ActorMessage) {
@@ -137,10 +198,29 @@ impl QuicActor {
                     self.accept_requests.push_back(AcceptRequest { respond_to });
                 }
             }
+            ActorMessage::Listen { local, respond_to } => match self.add_socket(local).await {
+                Ok(_) => {
+                    let _ = respond_to.send(Ok(()));
+                }
+                Err(e) => {
+                    let _ = respond_to.send(Err(format!("add_socket failed: {:?}", e).into()));
+                }
+            },
             ActorMessage::Connect { url, respond_to } => {
                 let to = url.to_socket_addrs().unwrap().next().unwrap();
-                let udp = if to.is_ipv4() { &self.udp } else { &self.udp6 };
-                let from = udp.local_addr().unwrap();
+                let from = select_local_addr(to, None).await.unwrap();
+                let local = if to.is_ipv4() {
+                    SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), from.port())
+                } else {
+                    SocketAddr::new(IpAddr::V6(Ipv6Addr::UNSPECIFIED), from.port())
+                };
+                let socket_handle = match self.add_socket(local).await {
+                    Ok(v) => v,
+                    Err(e) => {
+                        let _ = respond_to.send(Err(format!("get_binding failed: {:?}", e).into()));
+                        return;
+                    }
+                };
                 // Generate a random source connection ID for the connection.
                 let mut scid = [0; quiche::MAX_CONN_ID_LEN];
                 let scid = &mut scid[0..self.conn_id_len];
@@ -148,14 +228,9 @@ impl QuicActor {
 
                 let scid = quiche::ConnectionId::from_ref(&scid).into_owned();
                 // Create a QUIC connection and initiate handshake.
-                let mut conn = quiche::connect(
-                    url.domain(),
-                    &scid,
-                    from,
-                    to,
-                    &mut self.config,
-                )
-                .unwrap();
+                let mut conn =
+                    quiche::connect(url.domain(), &scid, from, to, &mut self.config)
+                        .unwrap();
 
                 if let Some(keylog) = &self.keylog {
                     if let Ok(keylog) = keylog.try_clone() {
@@ -164,15 +239,15 @@ impl QuicActor {
                 }
                 let (write, send_info) = conn.send(&mut self.out).expect("initial send failed");
 
-                let udp = if to.is_ipv4() { &self.udp } else { &self.udp6 };
-                let _written = udp
-                    .send_to(&self.out[..write], &send_info.to)
+                let socket = self.sockets.get(&socket_handle).unwrap();
+                let _written = send_sas(socket, &self.out[..write], &send_info.to, &send_info.from)
                     .await
                     .unwrap();
                 self.conns.insert(
                     scid.clone(),
                     QuicConnection {
                         quiche_conn: conn,
+                        socket: socket.clone(),
                         before_established: true,
                         connect_request: Some(ConnectRequest { respond_to }),
                         recv_dgram_readness_requests: VecDeque::new(),
@@ -333,15 +408,16 @@ impl QuicActor {
         }
     }
 
-    async fn handle_udp_dgram(&mut self, len: usize, from: SocketAddr) {
-        trace!("Recv UDP {} bytes", len);
-        let udp = if from.is_ipv4() {
-            &self.udp
-        } else {
-            &self.udp6
-        };
-        let to = udp.local_addr().unwrap();
-        let hdr = match quiche::Header::from_slice(&mut self.buf, quiche::MAX_CONN_ID_LEN) {
+    async fn handle_udp_dgram(
+        &mut self,
+        handle: SocketHandle,
+        mut buf: BytesMut,
+        from: SocketAddr,
+        to: SocketAddr,
+    ) {
+        trace!("Recv UDP {} bytes", buf.len());
+
+        let hdr = match quiche::Header::from_slice(&mut buf, quiche::MAX_CONN_ID_LEN) {
             Ok(v) => v,
             Err(e) => {
                 error!("Parsing packet header failed: {:?}", e);
@@ -360,14 +436,8 @@ impl QuicActor {
 
             let new_dcid = quiche::ConnectionId::from_vec(new_dcid.into());
 
-            let mut conn = quiche::accept(
-                &new_dcid,
-                None,
-                to,
-                from,
-                &mut self.config,
-            )
-            .unwrap();
+            let mut conn =
+                quiche::accept(&new_dcid, None, to, from, &mut self.config).unwrap();
 
             if let Some(keylog) = &mut self.keylog {
                 if let Ok(keylog) = keylog.try_clone() {
@@ -375,10 +445,12 @@ impl QuicActor {
                 }
             }
 
+            let socket = self.sockets.get(&handle).unwrap();
             self.conns.insert(
                 new_dcid.clone(),
                 QuicConnection {
                     quiche_conn: conn,
+                    socket: socket.clone(),
                     before_established: true,
                     connect_request: None,
                     recv_dgram_readness_requests: VecDeque::new(),
@@ -393,7 +465,7 @@ impl QuicActor {
         let recv_info = quiche::RecvInfo { from, to };
         // Process potentially coalesced packets.
         if let Some(conn) = self.conns.get_mut(&conn_id) {
-            if let Err(e) = conn.quiche_conn.recv(&mut self.buf[..len], recv_info) {
+            if let Err(e) = conn.quiche_conn.recv(&mut buf, recv_info) {
                 error!("{} recv() failed: {:?}", conn.quiche_conn.trace_id(), e);
             }
 
@@ -438,36 +510,9 @@ impl QuicActor {
                 .min();
 
             tokio::select! {
-                Ok(_) = self.udp.readable() => {
-                    loop {
-                        match self.udp.try_recv_from(&mut self.buf[..]) {
-                            Ok((len, from)) => {
-                                self.handle_udp_dgram(len, from).await;
-                            },
-                            Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                                break;
-                            },
-                            Err(e) => {
-                                error!("try_recv_from() failed: {:?}", e);
-                            }
-                        }
-                    }
-                },
-                Ok(_) = self.udp6.readable() => {
-                    loop {
-                        match self.udp6.try_recv_from(&mut self.buf[..]) {
-                            Ok((len, from)) => {
-                                self.handle_udp_dgram(len, from).await;
-                            },
-                            Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                                break;
-                            },
-                            Err(e) => {
-                                error!("try_recv_from() failed: {:?}", e);
-                            }
-                        }
-                    }
-                },
+                Some((handle, (buf, from, to))) = self.recv_stream.next() => {
+                    self.handle_udp_dgram(handle, buf, from, to).await;
+                }
                 maybe_msg = self.receiver.recv(), if !self.shutdown => {
                     if let Some(msg) = maybe_msg {
                         self.handle_message(msg).await;
@@ -481,7 +526,7 @@ impl QuicActor {
                             }
                         }
                     }
-                }
+                },
                 _ = tokio::time::sleep(timeout.unwrap_or(Duration::from_millis(0))), if timeout.is_some() => {
                     info!("timeout");
                     self.conns.values_mut().for_each(|c| c.quiche_conn.on_timeout());
@@ -501,12 +546,7 @@ impl QuicActor {
                             break;
                         }
                     };
-                    let udp = if send_info.to.is_ipv4() {
-                        &self.udp
-                    } else {
-                        &self.udp6
-                    };
-                    match udp.send_to(&self.out[..write], &send_info.to).await {
+                    match send_sas(&conn.socket, &self.out[..write], &send_info.to, &send_info.from).await {
                         Ok(written) => {
                             trace!("{} written {} bytes", conn.quiche_conn.trace_id(), written);
                         }
@@ -537,6 +577,7 @@ impl QuicActor {
                 }
             }
             self.conns.retain(|_, ref mut c| !c.quiche_conn.is_closed());
+
             if self.shutdown && self.conns.is_empty() {
                 info!("No connection exists.");
                 break;
@@ -566,8 +607,6 @@ pub struct QuicHandle {
 
 impl QuicHandle {
     pub fn new(
-        udp: UdpSocket,
-        udp6: UdpSocket,
         config: quiche::Config,
         keylog: Option<File>,
         conn_id_len: usize,
@@ -577,17 +616,29 @@ impl QuicHandle {
         let (sender, receiver) = mpsc::channel(128);
         let mut actor = QuicActor::new(
             receiver,
-            udp,
-            udp6,
             config,
             keylog,
             conn_id_len,
             client_cert_required,
             shutdown_complete,
         );
+
         tokio::spawn(async move { actor.run().await });
 
         Self { sender }
+    }
+
+    pub async fn listen(&self, local: SocketAddr) -> Result<()> {
+        let (send, recv) = oneshot::channel();
+        let msg = ActorMessage::Listen {
+            local,
+            respond_to: send,
+        };
+        let _ = self.sender.send(msg).await;
+        match recv.await.expect("Actor task has been killed") {
+            Ok(v) => Ok(v),
+            Err(e) => Err(e),
+        }
     }
 
     pub async fn accept(&self) -> Result<QuicConnectionHandle> {
@@ -770,17 +821,18 @@ pub mod testing {
         config.enable_early_data();
         config.enable_dgram(true, 1000, 1000);
 
-        let udp = tokio::net::UdpSocket::bind(format!("127.0.0.1:{}", port)).await?;
-        let udp6 = tokio::net::UdpSocket::bind(format!("[::1]:{}", port)).await?;
         let quic = QuicHandle::new(
-            udp,
-            udp6,
             config,
             None,
             quiche::MAX_CONN_ID_LEN,
             false,
             shutdown_complete_tx.clone(),
         );
+
+        let local = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), port);
+        quic.listen(local).await.unwrap();
+        let local = SocketAddr::new(IpAddr::V6(Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 1)), port);
+        quic.listen(local).await.unwrap();
         Ok(quic)
     }
 
@@ -801,11 +853,7 @@ pub mod testing {
         config.enable_early_data();
         config.enable_dgram(true, 1000, 1000);
 
-        let udp = tokio::net::UdpSocket::bind("127.0.0.1:0").await?;
-        let udp6 = tokio::net::UdpSocket::bind("[::1]:0").await?;
         let quic = QuicHandle::new(
-            udp,
-            udp6,
             config,
             None,
             quiche::MAX_CONN_ID_LEN,

@@ -18,19 +18,21 @@ log = { version = "0.4", features = ["std"] }
 env_logger = "0.6.1"
 flexi_logger = "0.22"
 socket2 = "0.4"
-
-[target.'cfg(windows)'.dependencies.windows]
-version = "0.34"
-features = [
-    "alloc",
-    "Win32_Foundation",
-    "Win32_Storage_FileSystem",
-    "Win32_System_IO",
-]
+if-addrs = "0.7"
+if-watch = "0.3"
+async-stream = "0.3.3"
+tokio-stream = "0.1.9"
 
 [target.'cfg(target_os = "linux")'.dependencies]
+libc = "0.2"
 tokio-tun = "0.5.3"
 
 [target.'cfg(windows)'.dependencies]
+once_cell = "1.12"
 winreg = "0.10"
 windows-service = "0.4.0"
+
+[target.'cfg(windows)'.dependencies.windows-sys]
+version = "0.35"
+features = ["Win32_Foundation", "Win32_System_IO", "Win32_Networking_WinSock",
+            "Win32_Storage_FileSystem", "Win32_NetworkManagement_IpHelper"]

@@ -3,6 +3,7 @@ use log::info;
 use rqst::quic::*;
 use rqst::vpn;
 use tokio::sync::{broadcast, mpsc};
+use std::net::{SocketAddr, IpAddr, Ipv4Addr, Ipv6Addr};
 
 fn main() {
     let app = clap::command!()
@@ -259,34 +260,19 @@ async fn tokio_main(
         (notify_stop, false)
     };
 
-    let socket = socket2::Socket::new(socket2::Domain::IPV4, socket2::Type::DGRAM, None)?;
-    let address: std::net::SocketAddr = "0.0.0.0:3456".parse().unwrap();
-    let address = address.into();
-    socket.bind(&address)?;
-    socket.set_recv_buffer_size(0x7fffffff).unwrap();
-    socket.set_nonblocking(true).unwrap();
-    let udp: std::net::UdpSocket = socket.into();
-    let udp = tokio::net::UdpSocket::from_std(udp).unwrap();
-
-    let socket = socket2::Socket::new(socket2::Domain::IPV6, socket2::Type::DGRAM, None)?;
-    let address: std::net::SocketAddr = "[::]:3456".parse().unwrap();
-    let address = address.into();
-    socket.set_only_v6(true).unwrap();
-    socket.bind(&address)?;
-    socket.set_recv_buffer_size(0x7fffffff).unwrap();
-    socket.set_nonblocking(true).unwrap();
-    let udp6: std::net::UdpSocket = socket.into();
-    let udp6 = tokio::net::UdpSocket::from_std(udp6).unwrap();
-
     let quic = QuicHandle::new(
-        udp,
-        udp6,
         config,
         keylog,
         quiche::MAX_CONN_ID_LEN,
         !disable_verify,
         shutdown_complete_tx.clone(),
     );
+
+    let local = SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 3456);
+    quic.listen(local).await.unwrap();
+    let local = SocketAddr::new(IpAddr::V6(Ipv6Addr::UNSPECIFIED), 3456);
+    quic.listen(local).await.unwrap();
+
     loop {
         tokio::select! {
             Ok(conn) = quic.accept() => {

@@ -91,28 +91,7 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     let (notify_shutdown, _) = broadcast::channel(1);
     let (shutdown_complete_tx, mut shutdown_complete_rx) = mpsc::channel(1);
 
-    let socket = socket2::Socket::new(socket2::Domain::IPV4, socket2::Type::DGRAM, None)?;
-    let address: std::net::SocketAddr = "0.0.0.0:0".parse().unwrap();
-    let address = address.into();
-    socket.bind(&address)?;
-    socket.set_recv_buffer_size(0x7fffffff).unwrap();
-    socket.set_nonblocking(true).unwrap();
-    let udp: std::net::UdpSocket = socket.into();
-    let udp = tokio::net::UdpSocket::from_std(udp).unwrap();
-
-    let socket = socket2::Socket::new(socket2::Domain::IPV6, socket2::Type::DGRAM, None)?;
-    let address: std::net::SocketAddr = "[::]:0".parse().unwrap();
-    let address = address.into();
-    socket.set_only_v6(true).unwrap();
-    socket.bind(&address)?;
-    socket.set_recv_buffer_size(0x7fffffff).unwrap();
-    socket.set_nonblocking(true).unwrap();
-    let udp6: std::net::UdpSocket = socket.into();
-    let udp6 = tokio::net::UdpSocket::from_std(udp6).unwrap();
-
     let quic = QuicHandle::new(
-        udp,
-        udp6,
         config,
         keylog,
         quiche::MAX_CONN_ID_LEN,
