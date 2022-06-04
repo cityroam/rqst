@@ -70,7 +70,7 @@ enum ActorMessage {
 }
 
 struct QuicConnection {
-    quiche_conn: std::pin::Pin<Box<quiche::Connection>>,
+    quiche_conn: quiche::Connection,
     before_established: bool,
     connect_request: Option<ConnectRequest>,
     recv_dgram_readness_requests: VecDeque<RecvDgramReadnessRequest>,

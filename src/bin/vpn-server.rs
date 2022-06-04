@@ -2,35 +2,40 @@ use flexi_logger::{detailed_format, FileSpec, Logger, WriteMode};
 use log::info;
 use rqst::quic::*;
 use rqst::vpn;
-use std::sync::{Arc, Mutex};
 use tokio::sync::{broadcast, mpsc};
 
 fn main() {
-    let matches = clap::command!()
+    let app = clap::command!()
         .propagate_version(true)
         .subcommand_required(false)
         .arg_required_else_help(false)
         .arg(clap::arg!(-d - -disable_verify).help("Disable to verify the client certificate"))
         .arg(clap::arg!(-v - -verbose).help("Print logs to Stderr"))
-        .arg(clap::arg!(-p - -pktlog).help("Write packets to a pcap file"))
+        .arg(clap::arg!(-p - -pktlog).help("Write packets to a pcap file"));
+
+    #[cfg(windows)]
+    let app = app
         .subcommand(clap::Command::new("install").about("Install this program as service"))
         .subcommand(clap::Command::new("uninstall").about("Uninstall this program as service"))
         .subcommand(
             clap::Command::new("run_as_service").about("Work as service (Not used manually!)"),
-        )
-        .get_matches();
+        );
+    let matches = app.get_matches();
 
     match matches.subcommand() {
+        #[cfg(windows)]
         Some(("install", _)) => {
             if let Err(e) = vpn_server_service::install() {
                 eprintln!("{:?}", e);
             }
         }
+        #[cfg(windows)]
         Some(("uninstall", _)) => {
             if let Err(e) = vpn_server_service::uninstall() {
                 eprintln!("{:?}", e);
             }
         }
+        #[cfg(windows)]
         Some(("run_as_service", _)) => {
             if let Err(e) = vpn_server_service::run() {
                 eprintln!("{:?}", e);
@@ -192,11 +197,6 @@ async fn tokio_main(
     };
     let _logger_handle = logger.start()?;
 
-    let tap_entries = vpn::get_tap_entries()?;
-    if tap_entries.is_empty() {
-        panic!("No tap interface");
-    }
-
     let mut config = quiche::Config::new(quiche::PROTOCOL_VERSION).unwrap();
 
     if !disable_verify {
@@ -287,7 +287,6 @@ async fn tokio_main(
         !disable_verify,
         shutdown_complete_tx.clone(),
     );
-    let tap_entries = Arc::new(Mutex::new(tap_entries));
     loop {
         tokio::select! {
             Ok(conn) = quic.accept() => {
@@ -297,7 +296,6 @@ async fn tokio_main(
                 );
                 tokio::spawn(vpn::transfer(
                     conn,
-                    tap_entries.clone(),
                     notify_shutdown.subscribe(),
                     notify_shutdown.subscribe(),
                     shutdown_complete_tx.clone(),
