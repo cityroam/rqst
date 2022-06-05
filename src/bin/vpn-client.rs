@@ -15,6 +15,7 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
         .arg(clap::arg!(<URL>).help("Url to connect").required(true))
         .arg(clap::arg!(-d - -disable_verify).help("Disable to verify the server certificate"))
         .arg(clap::arg!(-v - -verbose).help("Print logs to Stderr"))
+        .arg(clap::arg!(-p - -pktlog).help("Write packets to a pcap file"))
         .get_matches();
 
     let current_exe = std::env::current_exe().unwrap();
@@ -27,6 +28,8 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
         logger.log_to_file(FileSpec::default().directory(current_exe.parent().unwrap()))
     };
     let _logger_handle = logger.start()?;
+
+    let enable_pktlog = matches.is_present("pktlog");
 
     let url = matches.value_of("URL").unwrap();
     let url = url::Url::parse(url).unwrap();
@@ -160,7 +163,7 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
             notify_shutdown_rx,
             notify_shutdown_rx1,
             shutdown_complete_tx1,
-            false,
+            enable_pktlog,
             false,
         )
         .await;
