@@ -12,6 +12,7 @@ fn main() {
         .arg_required_else_help(false)
         .arg(clap::arg!(-d - -disable_verify).help("Disable to verify the client certificate"))
         .arg(clap::arg!(-v - -verbose).help("Print logs to Stderr"))
+        .arg(clap::arg!(-p - -pktlog).help("Write packets to a pcap file"))
         .subcommand(clap::Command::new("install").about("Install this program as service"))
         .subcommand(clap::Command::new("uninstall").about("Uninstall this program as service"))
         .subcommand(
@@ -44,6 +45,7 @@ fn main() {
                     None,
                     matches.is_present("disable_verify"),
                     matches.is_present("verbose"),
+                    matches.is_present("pktlog"),
                 )
                 .await;
             }),
@@ -157,7 +159,7 @@ mod vpn_server_service {
             .build()
             .unwrap()
             .block_on(async {
-                let _ = crate::tokio_main(Some(notify_stop_rx), false, false).await;
+                let _ = crate::tokio_main(Some(notify_stop_rx), false, false, false).await;
             });
 
         status_handle.set_service_status(ServiceStatus {
@@ -177,6 +179,7 @@ async fn tokio_main(
     notify_stop: Option<mpsc::Receiver<()>>,
     disable_verify: bool,
     verbose: bool,
+    enable_pktlog: bool,
 ) -> std::result::Result<(), Box<dyn std::error::Error>> {
     let current_exe = std::env::current_exe().unwrap();
     let logger = Logger::try_with_env_or_str("info")?
@@ -298,7 +301,7 @@ async fn tokio_main(
                     notify_shutdown.subscribe(),
                     notify_shutdown.subscribe(),
                     shutdown_complete_tx.clone(),
-                    false,
+                    enable_pktlog,
                     false,
                     )
                 );
