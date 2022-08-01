@@ -276,10 +276,7 @@ async fn tokio_main(
     loop {
         tokio::select! {
             Ok(conn) = quic.accept() => {
-                info!(
-                    "Connection accepted: {:?}",
-                    quiche::ConnectionId::from_vec(conn.conn_id.clone())
-                );
+                info!("Connection accepted: {}", conn.conn_handle);
                 tokio::spawn(vpn::transfer(
                     conn,
                     notify_shutdown.subscribe(),

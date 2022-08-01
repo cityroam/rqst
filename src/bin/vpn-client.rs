@@ -111,10 +111,7 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
             ret = quic.connect(url) => {
                 match ret {
                     Ok(conn) => {
-                        info!(
-                            "Connection connected: {:?}",
-                            quiche::ConnectionId::from_vec(conn.conn_id.clone())
-                        );
+                        info!("Connection connected: {}", conn.conn_handle);
                         conn
                    },
                    Err(e) => {
