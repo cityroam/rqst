@@ -9,16 +9,13 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     env_logger::init();
 
     let mut config = quiche::Config::new(quiche::PROTOCOL_VERSION).unwrap();
-    config
-        .load_verify_locations_from_file("src/ca.crt")
-        .unwrap();
-    config.verify_peer(true);
+    config.verify_peer(false);
 
     config
-        .load_cert_chain_from_pem_file("src/server.crt")
+        .load_cert_chain_from_pem_file("src/cert.crt")
         .unwrap();
     config
-        .load_priv_key_from_pem_file("src/server.key")
+        .load_priv_key_from_pem_file("src/cert.key")
         .unwrap();
 
     config.set_application_protos(&[b"vpn"]).unwrap();
@@ -65,6 +62,7 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     let socket = socket2::Socket::new(socket2::Domain::IPV6, socket2::Type::DGRAM, None)?;
     let address: std::net::SocketAddr = "[::]:4567".parse().unwrap();
     let address = address.into();
+    socket.set_only_v6(true).unwrap();
     socket.bind(&address)?;
     socket.set_recv_buffer_size(0x7fffffff).unwrap();
     socket.set_nonblocking(true).unwrap();
@@ -77,7 +75,7 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
         config,
         keylog,
         quiche::MAX_CONN_ID_LEN,
-        true,
+        false,
         shutdown_complete_tx.clone(),
     );
     loop {
