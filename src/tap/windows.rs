@@ -2,7 +2,7 @@ use std::fs::OpenOptions;
 use std::io;
 use std::os::windows::prelude::*;
 use tokio::net::windows::named_pipe;
-use windows::{Win32::Foundation::*, Win32::Storage::FileSystem::*, Win32::System::IO::*};
+use windows_sys::{Win32::Storage::FileSystem::*, Win32::System::IO::*};
 use winreg::enums::*;
 use winreg::RegKey;
 
@@ -46,7 +46,7 @@ impl Tap {
                     .read(true)
                     .write(true)
                     .create(false)
-                    .attributes(FILE_ATTRIBUTE_SYSTEM.0 | FILE_FLAG_OVERLAPPED.0)
+                    .attributes(FILE_ATTRIBUTE_SYSTEM | FILE_FLAG_OVERLAPPED)
                     .open(format!("\\\\.\\Global\\{}.tap", instance_id))
                 {
                     Ok(file) => Some(file),
@@ -68,7 +68,7 @@ impl Tap {
         let mut len: u32 = 0;
         unsafe {
             if DeviceIoControl(
-                HANDLE(file.as_raw_handle() as isize),
+                file.as_raw_handle() as isize,
                 TAP_WIN_IOCTL_SET_MEDIA_STATUS,
                 info.as_mut_ptr() as _,
                 4,
@@ -76,8 +76,7 @@ impl Tap {
                 4,
                 &mut len,
                 std::ptr::null_mut(),
-            )
-            .as_bool()
+            ) != 0
             {
                 let inner =
                     named_pipe::NamedPipeClient::from_raw_handle(file.into_raw_handle()).unwrap();

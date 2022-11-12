@@ -1,5 +1,6 @@
 extern crate env_logger;
 
+use if_watch::IfWatcher;
 use bytes::BytesMut;
 use rqst::quic::*;
 use std::env;
@@ -54,33 +55,15 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     let (notify_shutdown, _) = broadcast::channel(1);
     let (shutdown_complete_tx, mut shutdown_complete_rx) = mpsc::channel(1);
 
-    let socket = socket2::Socket::new(socket2::Domain::IPV4, socket2::Type::DGRAM, None)?;
-    let address: std::net::SocketAddr = "0.0.0.0:0".parse().unwrap();
-    let address = address.into();
-    socket.bind(&address)?;
-    socket.set_recv_buffer_size(0x7fffffff).unwrap();
-    socket.set_nonblocking(true).unwrap();
-    let udp: std::net::UdpSocket = socket.into();
-    let udp = tokio::net::UdpSocket::from_std(udp).unwrap();
-
-    let socket = socket2::Socket::new(socket2::Domain::IPV6, socket2::Type::DGRAM, None)?;
-    let address: std::net::SocketAddr = "[::]:0".parse().unwrap();
-    let address = address.into();
-    socket.bind(&address)?;
-    socket.set_recv_buffer_size(0x7fffffff).unwrap();
-    socket.set_nonblocking(true).unwrap();
-    let udp6: std::net::UdpSocket = socket.into();
-    let udp6 = tokio::net::UdpSocket::from_std(udp6).unwrap();
-
     let quic = QuicHandle::new(
-        udp,
-        udp6,
         config,
         keylog,
         quiche::MAX_CONN_ID_LEN,
         false,
         shutdown_complete_tx.clone(),
     );
+
+    let mut ifwatcher = IfWatcher::new().await.unwrap();
 
     let mut notify_shutdown_rx: broadcast::Receiver<()> = notify_shutdown.subscribe();
     let shutdown_complete_tx1 = shutdown_complete_tx.clone();
@@ -110,6 +93,7 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
                 return;
             },
         };
+
 
         println!("enter loop");
         let mut now = Instant::now();
@@ -151,6 +135,9 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
                             break;
                         }
                     }
+                },
+                event = Pin::new(&mut ifwatcher) => {
+                    println!("Got event {:?}", event);
                 },
                 _ = notify_shutdown_rx.recv() => {
                     break;
