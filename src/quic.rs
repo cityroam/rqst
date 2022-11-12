@@ -243,6 +243,17 @@ impl QuicActor {
                         conn.set_keylog(Box::new(keylog));
                     }
                 }
+
+                if let Some(dir) = std::env::var_os("QLOGDIR") {
+                    let writer = make_qlog_writer(&dir, "client", &conn.trace_id());
+        
+                    conn.set_qlog(
+                        std::boxed::Box::new(writer),
+                        "quiche-client qlog".to_string(),
+                        format!("{} id={}", "quiche-client qlog", conn.trace_id()),
+                    );
+                }
+
                 let (write, send_info) = conn.send(&mut self.out).expect("initial send failed");
 
                 let socket = self.sockets.get(&socket_handle).unwrap();
@@ -444,6 +455,16 @@ impl QuicActor {
                 if let Ok(keylog) = keylog.try_clone() {
                     conn.set_keylog(Box::new(keylog));
                 }
+            }
+
+            if let Some(dir) = std::env::var_os("QLOGDIR") {
+                let writer = make_qlog_writer(&dir, "server", &conn.trace_id());
+
+                conn.set_qlog(
+                    std::boxed::Box::new(writer),
+                    "quiche-server qlog".to_string(),
+                    format!("{} id={}", "quiche-server qlog", conn.trace_id()),
+                );
             }
 
             let socket = self.sockets.get(&handle).unwrap();
@@ -821,6 +842,24 @@ impl QuicConnectionHandle {
         };
         let _ = self.sender.send(msg).await;
         recv.await.expect("Actor task has been killed")
+    }
+}
+
+/// Makes a buffered writer for a qlog.
+pub fn make_qlog_writer(
+    dir: &std::ffi::OsStr, role: &str, id: &str,
+) -> std::io::BufWriter<std::fs::File> {
+    let mut path = std::path::PathBuf::from(dir);
+    let filename = format!("{}-{}.sqlog", role, id);
+    path.push(filename);
+
+    match std::fs::File::create(&path) {
+        Ok(f) => std::io::BufWriter::new(f),
+
+        Err(e) => panic!(
+            "Error creating qlog file attempted path was {:?}: {}",
+            path, e
+        ),
     }
 }
 
