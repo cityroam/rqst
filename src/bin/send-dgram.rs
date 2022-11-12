@@ -76,10 +76,7 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
             ret = quic.connect(url) => {
                 match ret {
                     Ok(conn) => {
-                        println!(
-                            "Connection established: {:?}",
-                            quiche::ConnectionId::from_vec(conn.conn_id.clone())
-                        );
+                        println!("Connection established: {}", conn.conn_handle);
                         conn
                    },
                    Err(e) => {

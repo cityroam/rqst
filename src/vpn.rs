@@ -39,9 +39,8 @@ pub async fn transfer(
         };
 
         info!(
-            "Transfer starts: ConnectionID: {:?}, Tap: {:?}",
-            quiche::ConnectionId::from_vec(quic.conn_id.clone()),
-            &tap
+            "Transfer starts: ConnectionHandle: {}, Tap: {:?}",
+            quic.conn_handle, &tap
         );
         let quic1 = quic.clone();
         let quic2 = quic.clone();

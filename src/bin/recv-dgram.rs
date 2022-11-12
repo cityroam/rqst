@@ -15,9 +15,7 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     config
         .load_cert_chain_from_pem_file("src/cert.crt")
         .unwrap();
-    config
-        .load_priv_key_from_pem_file("src/cert.key")
-        .unwrap();
+    config.load_priv_key_from_pem_file("src/cert.key").unwrap();
 
     config.set_application_protos(&[b"vpn"]).unwrap();
 
@@ -67,10 +65,7 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     loop {
         tokio::select! {
             Ok(conn) = quic.accept() => {
-                println!(
-                    "Connection accepted: {:?}",
-                    quiche::ConnectionId::from_vec(conn.conn_id.clone())
-                );
+                println!("Connection accepted: {}", conn.conn_handle);
                 let mut notify_shutdown_rx: broadcast::Receiver<()> = notify_shutdown.subscribe();
                 let shutdown_complete_tx1 = shutdown_complete_tx.clone();
                 tokio::spawn( async move {
