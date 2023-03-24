@@ -1,6 +1,5 @@
 extern crate env_logger;
 
-use if_watch::IfWatcher;
 use bytes::BytesMut;
 use rqst::quic::*;
 use std::env;
@@ -37,6 +36,7 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     config.set_disable_active_migration(true);
     config.enable_early_data();
     config.enable_dgram(true, 1000, 1000);
+    config.set_multipath(true);
 
     let mut keylog = None;
 
@@ -63,8 +63,6 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
         shutdown_complete_tx.clone(),
     );
 
-    let mut ifwatcher = IfWatcher::new().await.unwrap();
-
     let mut notify_shutdown_rx: broadcast::Receiver<()> = notify_shutdown.subscribe();
     let shutdown_complete_tx1 = shutdown_complete_tx.clone();
 
@@ -72,12 +70,12 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let _shutdown_complete_tx1 = shutdown_complete_tx1;
 
         println!("connecting to {}", &url);
-        let conn = tokio::select! {
-            ret = quic.connect(url) => {
+        let conn = quic.connect(url, None).await.unwrap();
+        tokio::select! {
+            ret = conn.wait_connected() => {
                 match ret {
-                    Ok(conn) => {
+                    Ok(_) => {
                         println!("Connection established: {}", conn.conn_handle);
-                        conn
                    },
                    Err(e) => {
                        println!("connect failed: {:?}", e);
@@ -91,7 +89,23 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
             },
         };
 
+        if let Ok(paths) = conn.path_stats().await {
+            assert_eq!(paths.len(), 1);
+            let mut local_addr = paths[0].local_addr;
+            let peer_addr = paths[0].peer_addr;
 
+            conn.insert_group(local_addr, peer_addr, 1).await.ok();
+
+            local_addr.set_port(local_addr.port() + 1);
+            match conn.probe_path(local_addr, peer_addr).await {
+                Ok(_) => {
+                    println!("Request probing ({} {})", local_addr, peer_addr);
+                }
+                Err(e) => {
+                    println!("failed to probe_path: {:?}", e);
+                }
+            }
+        }
         println!("enter loop");
         let mut now = Instant::now();
         let mut count: u8 = 0;
@@ -114,11 +128,12 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
             buf.resize(1292, count);
             let buf = buf.freeze();
             tokio::select! {
-                /*
-                _ = sleep(Duration::from_nanos(0)) => {
-                    let res = quic.send_dgram(conn_id.clone(), &buf).await;
-                */
-                res = conn.send_dgram(&buf) => {
+                _ = tokio::time::sleep(Duration::from_secs(1)) => {
+                    let res = if count % 2 == 0 {
+                        conn.send_dgram(&buf, 1).await
+                    } else {
+                        conn.send_dgram(&buf, 2).await
+                    };
                     match res {
                         Ok(_) => {
                             if let Some(new_count) = count.checked_add(1) {
@@ -132,9 +147,50 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
                             break;
                         }
                     }
-                },
-                event = Pin::new(&mut ifwatcher) => {
-                    println!("Got event {:?}", event);
+                }
+                res = conn.path_event() => {
+                    match res {
+                        Ok(event) => {
+                            match event {
+                                quiche::PathEvent::New(..) => unreachable!(),
+
+                                quiche::PathEvent::Validated(local_addr, peer_addr) => {
+                                    println!("Path ({}, {}) is now validated", local_addr, peer_addr);
+                                    conn.set_active(local_addr, peer_addr, true).await.ok();
+                                }
+
+                                quiche::PathEvent::ReturnAvailable(local_addr, peer_addr) => {
+                                    println!("Path ({}, {})'s return is now available", local_addr, peer_addr);
+                                    conn.insert_group(local_addr, peer_addr, 2).await.ok();
+                                }
+                                
+                                quiche::PathEvent::FailedValidation(local_addr, peer_addr) => {
+                                    println!("Path ({}, {}) failed validation", local_addr, peer_addr);
+                                }
+
+                                quiche::PathEvent::Closed(local_addr, peer_addr, e, reason) => {
+                                    println!("Path ({}, {}) is now closed and unusable; err = {}, reason = {:?}",
+                                        local_addr, peer_addr, e, reason);
+                                }
+
+                                quiche::PathEvent::ReusedSourceConnectionId(cid_seq, old, new) => {
+                                    println!("Peer reused cid seq {} (initially {:?}) on {:?}",
+                                        cid_seq, old, new);
+                                }
+
+                                quiche::PathEvent::PeerMigrated(..) => unreachable!(),
+
+                                quiche::PathEvent::PeerPathStatus(..) => {},
+
+                                quiche::PathEvent::InsertGroup(..) => unreachable!(),
+
+                                quiche::PathEvent::RemoveGroup(..) => unreachable!(),
+                            }
+                        }
+                        Err(e) => {
+                            println!("path_event failed: {:?}", e);
+                        }
+                    }
                 },
                 _ = notify_shutdown_rx.recv() => {
                     break;

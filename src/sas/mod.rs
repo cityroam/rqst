@@ -11,7 +11,7 @@ use std::io;
 use std::net::{SocketAddr, IpAddr, Ipv4Addr, Ipv6Addr};
 use tokio::net::{lookup_host, UdpSocket, ToSocketAddrs};
 
-pub async fn select_local_addr(remote: SocketAddr, local: Option<SocketAddr>) -> io::Result<SocketAddr> {
+pub async fn select_local_ipaddr(remote: SocketAddr, local: Option<SocketAddr>) -> io::Result<IpAddr> {
     let local = if local.is_some() {
         local.unwrap()
     } else {
@@ -23,7 +23,7 @@ pub async fn select_local_addr(remote: SocketAddr, local: Option<SocketAddr>) ->
     };
     let socket = UdpSocket::bind(local).await?;
     socket.connect(remote).await?;
-    socket.local_addr()
+    Ok(socket.local_addr()?.ip())
 }
 
 pub async fn recv_sas(

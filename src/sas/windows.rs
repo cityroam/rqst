@@ -159,7 +159,7 @@ pub fn try_recv_sas(
                             sin_port: 0,
                             sin_zero: [0u8; 8],
                         };
-                        let (_, address) = socket2::SockAddr::init(|addr_storage, len| {
+                        let (_, address) = socket2::SockAddr::try_init(|addr_storage, len| {
                             *len = mem::size_of_val(&destination) as _;
                             std::ptr::copy_nonoverlapping(&destination, addr_storage as _, 1);
                             Ok(())
@@ -174,7 +174,7 @@ pub fn try_recv_sas(
                         let mut destination: SOCKADDR_IN6 = mem::zeroed();
                         destination.sin6_family = AF_INET6 as _;
                         destination.sin6_addr = info.ipi6_addr;
-                        let (_, address) = socket2::SockAddr::init(|addr_storage, len| {
+                        let (_, address) = socket2::SockAddr::try_init(|addr_storage, len| {
                             *len = mem::size_of_val(&destination) as _;
                             std::ptr::copy_nonoverlapping(&destination, addr_storage as _, 1);
                             Ok(())
@@ -185,7 +185,7 @@ pub fn try_recv_sas(
                 }
             }
             let source_address = unsafe {
-                let (_, address) = socket2::SockAddr::init(|addr_storage, len| {
+                let (_, address) = socket2::SockAddr::try_init(|addr_storage, len| {
                     *len = mem::size_of_val(&source) as _;
                     ptr::copy_nonoverlapping(&source, addr_storage as _, 1);
                     Ok(())
@@ -227,7 +227,7 @@ pub fn try_send_sas(
         dwFlags: 0,
     };
 
-    match local.family() as u32 {
+    match local.family() {
         AF_INET => {
             let local: SOCKADDR_IN = unsafe { ptr::read(local.as_ptr() as _) };
             let info = IN_PKTINFO {
@@ -522,15 +522,15 @@ mod tests {
 
     #[tokio::test]
     async fn test_send_sas_ipv4() {
-        use if_watch::IfWatcher;
+        use tokio_stream::StreamExt;
+        use if_watch::tokio::IfWatcher;
         use std::net::IpAddr;
-        use std::pin::Pin;
 
         let sender = bind_sas("0.0.0.0:0").await.unwrap();
         let send_buf = b"hello";
 
-        let mut ifwatcher = IfWatcher::new().await.unwrap();
-        let _ = Pin::new(&mut ifwatcher).await;
+        let mut ifwatcher = IfWatcher::new().unwrap();
+        ifwatcher.next().await;
         for ipnet in ifwatcher.iter() {
             match ipnet.addr() {
                 IpAddr::V4(addr) => {
@@ -552,15 +552,15 @@ mod tests {
 
     #[tokio::test]
     async fn test_send_sas_ipv6() {
-        use if_watch::IfWatcher;
+        use tokio_stream::StreamExt;
+        use if_watch::tokio::IfWatcher;
         use std::net::IpAddr;
-        use std::pin::Pin;
 
         let sender = bind_sas("[::]:0").await.unwrap();
         let send_buf = b"hello";
 
-        let mut ifwatcher = IfWatcher::new().await.unwrap();
-        let _ = Pin::new(&mut ifwatcher).await;
+        let mut ifwatcher = IfWatcher::new().unwrap();
+        ifwatcher.next().await;
         for ipnet in ifwatcher.iter() {
             match ipnet.addr() {
                 IpAddr::V4(_) => {}
